@@ -6,40 +6,43 @@ import io
 import zipfile
 
 # ---------- PAGE SETUP ----------
-st.set_page_config(page_title="Full-Stack AI Builder", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="AI Project Generator", page_icon="🏗️", layout="wide")
 
+# ---------- API CONFIG ----------
+API_KEY = st.secrets["GROQ_API_KEY"]
+
+# Layout: Left (Chat), Right (Project Files)
 col1, col2 = st.columns([1, 1.2])
 
 with col1:
-    st.title("🏗️ AI App Builder")
-    st.write("Koi bhi Website, App ya Software banwao!")
+    st.title("🏗️ AI Project Architect")
+    st.write("Select a tech stack and describe your app. I'll generate the complete project code for you!")
     
     with st.sidebar:
-        st.header("Project Setup")
-        project_type = st.selectbox("Kya banana hai?", [
-            "Simple Website (HTML/CSS/JS)",
-            "Python Backend / Script",
-            "React / Next.js Web App",
-            "Flutter Mobile App",
-            "Data Science / ML Project"
+        st.header("Project Settings")
+        project_type = st.selectbox("Choose Tech Stack:", [
+            "Next.js (React) App",
+            "Python Flask API",
+            "HTML + Tailwind CSS Website",
+            "Node.js Express Backend",
+            "Python Automation Script"
         ])
         
-        if st.button("🗑️ Naya Project"):
+        if st.button("🗑️ Reset Project"):
             st.session_state.messages = []
             st.session_state.project_files = {}
             st.rerun()
 
-    API_KEY = st.secrets["GROQ_API_KEY"]
-
-    # Initialize states
+    # Session State for Chat and Files
     if "messages" not in st.session_state:
         st.session_state.messages = [
-            {"role": "system", "content": f"You are a Senior Full-Stack Developer. The user wants to build: {project_type}. "
-                                          "Write complete, production-ready code. "
-                                          "If you create multiple files, format them clearly using: \n"
-                                          "### FILENAME: filename.ext\n"
-                                          "```language\ncode here\n```\n"
-                                          "Always provide all necessary files to run the project."}
+            {"role": "system", "content": f"You are a Senior Software Architect. The user wants to build a {project_type}. "
+                                          "Generate the COMPLETE boilerplate code. "
+                                          "For EVERY file, you MUST use this exact format:\n"
+                                          "### FILENAME: path/to/filename.ext\n"
+                                          "```language\n[code here]\n```\n"
+                                          "Do not skip essential files (like package.json, requirements.txt, README.md, config files). "
+                                          "Keep the code clean, functional, and well-commented. Do not add any conversational text, ONLY file outputs."}
         ]
     if "project_files" not in st.session_state:
         st.session_state.project_files = {}
@@ -51,7 +54,7 @@ with col1:
                 st.markdown(msg["content"])
 
     # Chat Input
-    if prompt := st.chat_input("Example: Ek to-do list app banao with LocalStorage..."):
+    if prompt := st.chat_input("Example: Ek login system banao with JWT auth..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
@@ -60,7 +63,7 @@ with col1:
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
             data = {
-                "model": "qwen/qwen3.8-27b", 
+                "model": "qwen/qwen3.8-27b", # Qwen coding mein best hai
                 "messages": st.session_state.messages, 
                 "stream": True
             }
@@ -84,62 +87,55 @@ with col1:
             full_response = st.write_stream(generate_response())
             st.session_state.messages.append({"role": "assistant", "content": full_response})
 
-        # --- SMART PARSER: Files aur Code nikalna ---
-        # Regex se "### FILENAME: filename.ext" aur uske baad ka code dhoondhna
-        file_pattern = re.compile(r'### FILENAME:\s*(.*?)\n```[a-zA-Z]*\n(.*?)```', re.DOTALL)
+        # --- SMART PARSER (Extracting Files & Folders) ---
+        # Regex to find "### FILENAME: name.ext" followed by a code block
+        file_pattern = re.compile(r'### FILENAME:\s*(.*?)\n```[a-zA-Z0-9]*\n(.*?)```', re.DOTALL)
         matches = file_pattern.findall(full_response)
         
         if matches:
             for filename, code in matches:
-                st.session_state.project_files[filename.strip()] = code.strip()
-            st.rerun() # Files mil gayi, right side update karo
+                # Clean up filename (remove spaces or backticks if AI added them)
+                clean_name = filename.strip().replace('`', '')
+                st.session_state.project_files[clean_name] = code.strip()
+            st.rerun()
 
-# ---------- RIGHT COLUMN: PREVIEW & DOWNLOAD ----------
+# ---------- RIGHT COLUMN: PROJECT FILES & DOWNLOAD ----------
 with col2:
-    st.subheader("📁 Project Files & Preview")
+    st.subheader("📁 Generated Project Files")
     
     if st.session_state.project_files:
-        files = st.session_state.project_files
+        st.success(f"✅ Project successfully generated with {len(st.session_state.project_files)} files!")
         
-        # 1. Files ki list dikhana
-        st.write("**Files Generated:**")
-        for fname in files.keys():
-            st.write(f"- `{fname}`")
+        # Show File Tree
+        st.write("**File Structure:**")
+        for fname in st.session_state.project_files.keys():
+            st.code(fname, language="bash")
             
-        # 2. ZIP Download Button
+        # ZIP Creation
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-            for fname, code in files.items():
+            for fname, code in st.session_state.project_files.items():
+                # Folders create karke file likhna
                 zip_file.writestr(fname, code)
         zip_buffer.seek(0)
         
+        # Download Button
         st.download_button(
-            label="📦 Download Full Project (ZIP)",
+            label="📦 Download Complete Project (.ZIP)",
             data=zip_buffer,
-            file_name="my_ai_project.zip",
+            file_name=f"my_ai_project.zip",
             mime="application/zip",
-            type="primary"
+            type="primary",
+            use_container_width=True
         )
         
         st.divider()
         
-        # 3. Live Preview (Agar HTML/CSS/JS hai)
-        html_file = next((f for f in files.keys() if f.endswith('.html')), None)
-        if html_file:
-            st.write(f"**Live Preview (`{html_file}`):**")
-            # CSS/JS ko HTML mein merge karke preview dikhana
-            html_content = files[html_file]
-            
-            # Agar CSS/JS alag files mein hain, toh unko inline karo preview ke liye
-            for fname, code in files.items():
-                if fname.endswith('.css'):
-                    html_content = html_content.replace(f'<link rel="stylesheet" href="{fname}">', f'<style>{code}</style>')
-                if fname.endswith('.js'):
-                    html_content = html_content.replace(f'<script src="{fname}"></script>', f'<script>{code}</script>')
-            
-            st.components.v1.html(html_content, height=500, scrolling=True)
-        else:
-            st.info("Ye backend/app code hai. Iska live preview yahan nahi dikhega. Aap ZIP download karke apne PC par run kar sakte hain.")
+        # Code Viewer (Dropdown to view any file's code)
+        st.write("**Preview Code:**")
+        selected_file = st.selectbox("Select a file to view:", list(st.session_state.project_files.keys()))
+        if selected_file:
+            st.code(st.session_state.project_files[selected_file], language="python")
             
     else:
-        st.info("AI aapse baat karke code generate karega aur yahan files dikhengi. Aap poora project ek ZIP file mein download kar sakte hain!")
+        st.info("Yahan aapke project ki files dikhengi. Left side se AI ko prompt do!")
