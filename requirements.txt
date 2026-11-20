@@ -1,4 +1,7 @@
 streamlit
 requests
-python-docx
-openpyxl
+pandas
+gTTS
+pypdf
+duckduckgo-search
+beautifulsoup4
