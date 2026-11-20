@@ -1,143 +1,146 @@
 import streamlit as st
 import requests
 import json
+import uuid
+import pandas as pd
+from gtts import gTTS
 import io
-from openpyxl import Workbook
-from docx import Document
-from docx.shared import Pt, Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from pypdf import PdfReader
+from duckduckgo_search import DDGS
+from bs4 import BeautifulSoup
 
-# ---------- CONFIG (Streamlit Secrets se API key uthegi) ----------
+# ---------- PAGE SETUP ----------
+st.set_page_config(page_title="Ultimate GPT Clone", page_icon="🤖", layout="wide")
 API_KEY = st.secrets["GROQ_API_KEY"]
-MODEL = "qwen/qwen3.8-27b"
 
-# Page Setting
-st.set_page_config(page_title="AI Office Assistant", page_icon="🤖", layout="wide")
-st.title("🤖 AI Office Assistant (JARVIS)")
-st.write("Mujhse koi bhi Word Document ya Excel Sheet banwao, main taiyar karke dunga!")
+# ---------- CONNECTOR FUNCTIONS ----------
+def web_search(query):
+    try:
+        results = DDGS().text(query, max_results=3)
+        return "\n".join([f"- {r['title']}: {r['body']}" for r in results])
+    except Exception as e:
+        return "Search failed."
 
-def call_ai(system_prompt, user_prompt):
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
-    data = {
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-    }
-    res = requests.post(url, headers=headers, json=data)
-    if res.status_code == 200:
-        text = res.json()['choices'][0]['message']['content']
-        return text.replace("```json", "").replace("```", "").strip()
-    return None
+def read_website(url):
+    try:
+        res = requests.get(url, timeout=5)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        text = ' '.join(soup.stripped_strings)
+        return text[:3000] # Pehle 3000 characters (Context limit ke liye)
+    except:
+        return "Website read failed."
 
-# Chat History Save Karne Ke Liye
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# ---------- SESSION STATE ----------
+if "chats" not in st.session_state:
+    st.session_state.chats = {}
+if "current_chat_id" not in st.session_state:
+    new_id = str(uuid.uuid4())
+    st.session_state.current_chat_id = new_id
+    st.session_state.chats[new_id] = []
 
-# Purani chat dikhana
-for msg in st.session_state.messages:
+# ---------- SIDEBAR ----------
+with st.sidebar:
+    st.title("🤖 Ultimate GPT")
+    
+    if st.button("➕ New Chat", use_container_width=True):
+        new_id = str(uuid.uuid4())
+        st.session_state.current_chat_id = new_id
+        st.session_state.chats[new_id] = []
+        st.rerun()
+        
+    st.divider()
+    
+    # --- CONNECTORS TOGGLE ---
+    st.subheader("🔌 Connectors (Plugins)")
+    use_web_search = st.toggle("🌐 Enable Web Search", value=False, help="AI ko live internet search ki permission do.")
+    use_url_reader = st.toggle("🔗 Enable URL Reader", value=False, help="Kisi bhi website ka link dekar usko padhwao.")
+    
+    st.divider()
+    
+    st.subheader("Recent Chats")
+    for chat_id in reversed(list(st.session_state.chats.keys())):
+        msgs = st.session_state.chats[chat_id]
+        title = "New Chat"
+        for m in msgs:
+            if m["role"] == "user":
+                title = m["content"][:20] + "..."
+                break
+        if chat_id == st.session_state.current_chat_id:
+            st.button(f"👉 {title}", key=chat_id, disabled=True, use_container_width=True)
+        else:
+            if st.button(f"💬 {title}", key=chat_id, use_container_width=True):
+                st.session_state.current_chat_id = chat_id
+                st.rerun()
+
+# ---------- MAIN CHAT AREA ----------
+st.title("🤖 AI Assistant with Connectors")
+current_messages = st.session_state.chats[st.session_state.current_chat_id]
+
+for msg in current_messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# Main Chat Input
-if user_req := st.chat_input("Kya banwana hai? (e.g., 'Rahul ka resume banao jisme Python skills ho')"):
+# ---------- CHAT INPUT ----------
+if prompt := st.chat_input("Message AI..."):
     
-    # User ka message screen par dikhao
-    st.session_state.messages.append({"role": "user", "content": user_req})
     with st.chat_message("user"):
-        st.markdown(user_req)
+        st.markdown(prompt)
+    current_messages.append({"role": "user", "content": prompt})
 
-    # AI ka process
+    # ---------- CONNECTOR LOGIC EXECUTION ----------
+    context_data = ""
+    
+    # 1. Web Search Connector
+    if use_web_search:
+        with st.spinner("🌐 Internet par search kar raha hoon..."):
+            search_results = web_search(prompt)
+            context_data += f"\n\n[Web Search Results]:\n{search_results}\n"
+            
+    # 2. URL Reader Connector (Agar prompt mein http ya www hai)
+    if use_url_reader and ("http" in prompt or "www." in prompt):
+        # Link extract karna (bahut basic logic)
+        words = prompt.split()
+        url = next((w for w in words if "http" in w or "www." in w), None)
+        if url:
+            with st.spinner(f"🔗 Website padh raha hoon: {url}"):
+                site_content = read_website(url)
+                context_data += f"\n\n[Website Content from {url}]:\n{site_content}\n"
+
+    # 3. API Call (Context ke saath)
     with st.chat_message("assistant"):
-        with st.spinner("Soch raha hoon..."):
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+        
+        # Agar connector ne data laaya hai, toh usko prompt mein add karo
+        final_prompt = prompt
+        if context_data:
+            final_prompt = f"{prompt}\n\nHere is the extra context from tools:\n{context_data}\n\nPlease answer based on this context."
             
-            # 1. Boss (Supervisor) se poocho
-            sup_prompt = 'You are a Supervisor. Decide if user needs "Excel" or "Word". Return ONLY valid JSON. Example: {"workers": ["Word"]}'
-            decision_text = call_ai(sup_prompt, user_req)
-            
-            try:
-                decision = json.loads(decision_text)
-                workers = decision.get("workers", ["Word"])
-            except:
-                workers = ["Word"]
+        api_messages = current_messages[:-1] + [{"role": "user", "content": final_prompt}]
+        
+        data = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": api_messages, 
+            "stream": True
+        }
+        
+        def generate_response():
+            response = requests.post(url, headers=headers, json=data, stream=True)
+            for line in response.iter_lines():
+                if line:
+                    decoded_line = line.decode('utf-8')
+                    if decoded_line.startswith("data: "):
+                        json_str = decoded_line[6:]
+                        if json_str.strip() != "[DONE]":
+                            try:
+                                chunk = json.loads(json_str)
+                                delta = chunk['choices'][0]['delta']
+                                if 'content' in delta:
+                                    yield delta['content']
+                            except:
+                                pass
 
-            # 2. Kaam karo
-            if "Word" in workers:
-                st.write("📝 **Word Document ban raha hai...**")
-                sys_prompt = 'You are an Expert Resume Writer. Return ONLY a JSON array of instructions. Actions: {"action": "add_name", "text": "Name"}, {"action": "add_heading", "text": "Heading"}, {"action": "add_text", "text": "Para"}, {"action": "add_job", "role": "Role", "company": "Company", "dates": "Date", "bullets": ["Point"]}'
-                response = call_ai(sys_prompt, user_req)
-                
-                try:
-                    plan = json.loads(response)
-                    doc = Document()
-                    for section in doc.sections:
-                        section.top_margin, section.bottom_margin = Inches(0.5), Inches(0.5)
-                    
-                    for step in plan:
-                        action = step.get("action")
-                        if action == "add_name":
-                            h = doc.add_heading(step["text"].upper(), level=0)
-                            h.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                        elif action == "add_heading":
-                            doc.add_heading(step["text"].upper(), level=1)
-                        elif action == "add_text":
-                            doc.add_paragraph(step["text"])
-                        elif action == "add_job":
-                            p = doc.add_paragraph()
-                            run_role = p.add_run(step["role"]); run_role.bold = True
-                            run_company = p.add_run(f" | {step['company']} ({step['dates']})"); run_company.italic = True
-                            for bullet in step["bullets"]:
-                                doc.add_paragraph(bullet, style='List Bullet')
-                    
-                    # File ko memory mein save karo
-                    doc_bytes = io.BytesIO()
-                    doc.save(doc_bytes)
-                    doc_bytes.seek(0)
-                    
-                    st.success("✅ Word File Taiyar Hai!")
-                    st.download_button(
-                        label="📥 Download Word File",
-                        data=doc_bytes,
-                        file_name="AI_Document.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    )
-                except Exception as e:
-                    st.error(f"Error: {e}")
-
-            # 3. Excel ka kaam
-            if "Excel" in workers:
-                st.write("📊 **Excel File ban rahi hai...**")
-                sys_prompt = 'You are a Data Generator. Return ONLY JSON array. Example: [{"Item": "A", "Value": 100}]'
-                response = call_ai(sys_prompt, user_req)
-                
-                try:
-                    data = json.loads(response)
-                    wb = Workbook()
-                    ws = wb.active
-                    if data:
-                        headers = list(data[0].keys())
-                        ws.append(headers)
-                        for row in data:
-                            ws.append(list(row.values()))
-                    
-                    # File ko memory mein save karo
-                    excel_bytes = io.BytesIO()
-                    wb.save(excel_bytes)
-                    excel_bytes.seek(0)
-                    
-                    st.success("✅ Excel File Taiyar Hai!")
-                    st.download_button(
-                        label="📥 Download Excel File",
-                        data=excel_bytes,
-                        file_name="AI_Data.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-                except Exception as e:
-                    st.error(f"Error: {e}")
-
-            # AI ka final jawab
-            final_msg = "Aapki file taiyar hai! Upar diye gaye button se download kar lein."
-            st.session_state.messages.append({"role": "assistant", "content": final_msg})
-            st.markdown(final_msg)
+        full_response = st.write_stream(generate_response())
+        
+        # History mein original prompt save karo, context nahi (taaki chat lamba na ho)
+        current_messages.append({"role": "assistant", "content": full_response})
