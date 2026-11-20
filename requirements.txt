@@ -1,7 +1,2 @@
 streamlit
 requests
-pandas
-gTTS
-pypdf
-duckduckgo-search
-beautifulsoup4
